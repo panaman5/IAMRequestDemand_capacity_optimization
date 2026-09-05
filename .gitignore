@@ -5,3 +5,8 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+tmp/
+output/pdf/*.aux
+output/pdf/*.log
+output/pdf/*.out
+output/pdf/*.toc
