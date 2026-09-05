@@ -1,4 +1,9 @@
-"""Minimal end-to-end modeling flow; intentionally not a test suite."""
+"""Minimal end-to-end modeling flow; intentionally not a test suite.
+
+The example is deliberately small enough to read from top to bottom. It shows
+the complete bridge from request observations to a protected request-capacity
+decision without connecting to a real IAM product yet.
+"""
 
 from __future__ import annotations
 
@@ -20,10 +25,16 @@ from iam_workload_capacity_model.forecast import empirical_quantile  # noqa: E40
 
 
 def historical_requests() -> tuple[RequestObservation, ...]:
-    """Small synthetic history showing the model contract."""
+    """Return synthetic history showing the model contract.
+
+    The repeated pattern is only demonstration data. It is not intended to
+    represent a real IAM distribution or to provide model quality evidence.
+    """
 
     requests: list[RequestObservation] = []
     for index in range(180):
+        # Every fifth request is rejected, which creates a visible approval
+        # mixture while keeping the example deterministic.
         approved = index % 5 != 0
         tasks = (
             BackendTask("provision", 8.0 + (index % 4), 1.0),
@@ -44,6 +55,7 @@ def historical_requests() -> tuple[RequestObservation, ...]:
 
 
 def main() -> None:
+    # 1. Collect the historical signals needed by the three model components.
     history = historical_requests()
     counts_by_period: dict[str, int] = {}
     rejected = 0
@@ -54,16 +66,22 @@ def main() -> None:
             decisions += 1
             rejected += request.outcome == "rejected"
 
+    # 2. Fit the request-count and rejection models from historical aggregates.
     count_model = NegativeBinomialModel.fit(tuple(counts_by_period.values()))
     rejection_model = RejectionRateModel.fit(decisions, rejected)
+
+    # 3. Calibrate recent-data-weighted workload distributions by outcome.
     distributions = fit_workload_distributions(history, forgetting_factor=0.995)
 
+    # 4. Combine count, approval outcome, and request weights through Monte
+    # Carlo simulation to obtain a predictive total-workload distribution.
     simulated = compound_workload_forecast(
         count_model,
         rejection_model,
         distributions,
         simulations=2000,
     )
+    # 5. Protect P95 request workload; only the residual is spare capacity.
     plan = plan_capacity(simulated, total_capacity=1000.0)
 
     print("IAM workload-capacity modeling flow")

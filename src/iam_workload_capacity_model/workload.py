@@ -1,4 +1,10 @@
-"""Request weights and distribution-free workload calibration."""
+"""Request weights and distribution-free workload calibration.
+
+This module turns request-level observations into the continuous workload
+signal used by the forecast. It uses a recent-data-weighted empirical
+distribution instead of forcing positive, potentially skewed request weights
+into a Normal distribution.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +17,12 @@ from .models import RequestObservation
 
 @dataclass(frozen=True)
 class WeightedEmpiricalDistribution:
-    """A positive workload distribution represented by weighted observations."""
+    """A positive workload distribution represented by weighted observations.
+
+    The values are individual observed request workloads. The weights are
+    statistical recency weights, not capacity units. Keeping the observations
+    themselves lets the compound forecast preserve skew and high-cost tails.
+    """
 
     values: tuple[float, ...]
     weights: tuple[float, ...]
@@ -26,16 +37,18 @@ class WeightedEmpiricalDistribution:
 
     @property
     def mean(self) -> float:
-        """Weighted mean workload."""
+        """Return the recency-weighted mean workload per request."""
 
         total_weight = sum(self.weights)
         return sum(value * weight for value, weight in zip(self.values, self.weights)) / total_weight
 
     def quantile(self, probability: float) -> float:
-        """Weighted empirical quantile."""
+        """Return a weighted empirical quantile of request workload."""
 
         if not 0.0 <= probability <= 1.0:
             raise ValueError("probability must be between zero and one")
+        # Sorting is needed because the observations arrive in time order,
+        # while a quantile is defined over the workload value axis.
         pairs = sorted(zip(self.values, self.weights))
         target = probability * sum(self.weights)
         cumulative = 0.0
@@ -46,13 +59,13 @@ class WeightedEmpiricalDistribution:
         return pairs[-1][0]
 
     def sample(self, rng: random.Random) -> float:
-        """Draw one workload value from the weighted empirical distribution."""
+        """Draw one request workload using the empirical probabilities."""
 
         return rng.choices(self.values, weights=self.weights, k=1)[0]
 
 
 def request_workload(request: RequestObservation) -> float:
-    """Apply the request workload contract to one observation."""
+    """Apply the request workload contract to one observed request."""
 
     return request.workload
 
@@ -60,10 +73,16 @@ def request_workload(request: RequestObservation) -> float:
 def aggregate_workload(
     requests: Iterable[RequestObservation],
 ) -> dict[str, tuple[int, float]]:
-    """Return request count and total workload by period."""
+    """Return ``period -> (request_count, total_workload)``.
+
+    The result is the historical time series used to inspect the relationship
+    between request volume and capacity workload before fitting forecasts.
+    """
 
     aggregates: dict[str, tuple[int, float]] = {}
     for request in requests:
+        # A request is assigned to its active workload bucket by the adapter.
+        # A later version can split task intervals across buckets when needed.
         count, workload = aggregates.get(request.period, (0, 0.0))
         aggregates[request.period] = (count + 1, workload + request_workload(request))
     return aggregates
@@ -77,7 +96,9 @@ def fit_workload_distributions(
     """Fit recent-data-weighted empirical distributions by approval outcome.
 
     Requests must be supplied in chronological order. The forgetting factor
-    controls how quickly older completed observations lose influence.
+    controls how quickly older completed observations lose influence. The
+    function does not fit a parametric shape; it estimates a distribution by
+    retaining the observed workload values and changing their probabilities.
     """
 
     if not 0.0 < forgetting_factor <= 1.0:
@@ -89,6 +110,8 @@ def fit_workload_distributions(
     }
     for age, request in enumerate(reversed(requests)):
         if request.outcome in by_outcome:
+            # ``age == 0`` is the newest observation, so it receives weight 1.
+            # Older observations receive progressively less influence.
             by_outcome[request.outcome].append(
                 (request_workload(request), forgetting_factor**age)
             )
