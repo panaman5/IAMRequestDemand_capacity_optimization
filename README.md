@@ -1,9 +1,9 @@
 # IAM Workload Capacity Model
 
 An independent modeling repository for the Project Optimus IAM capacity
-problem. It currently contains the modeling contract and end-to-end flow only;
-testing, data connectors, dashboards, and production hardening are deliberately
-left for a later phase.
+problem. The modeling flow is parameterized and separated from data acquisition
+and synthetic scenarios; testing, data connectors, dashboards, and production
+hardening are deliberately left for later phases.
 
 ## Core idea
 
@@ -70,13 +70,17 @@ The empirical distributions are used instead of assuming that request weights
 are Normal. The Negative Binomial model handles request-count overdispersion;
 the workload forecast is a compound sum.
 
-## Run the modeling example
+## Run the separate synthetic scenario
 
-The example uses only the Python standard library:
+The modeling flow itself does not contain embedded data. A separate fixture
+scenario can exercise it with:
 
 ```bash
-python3 examples/run_flow.py
+python3 examples/run_synthetic_test.py
 ```
+
+Applications should call `run_forecast` with their own observations and a
+`ForecastConfig`.
 
 ## Repository map
 
@@ -84,5 +88,8 @@ python3 examples/run_flow.py
 - `src/iam_workload_capacity_model/workload.py` - request weights and empirical distributions.
 - `src/iam_workload_capacity_model/forecast.py` - Negative Binomial, rejection, and compound forecast components.
 - `src/iam_workload_capacity_model/capacity.py` - protected request capacity and spare-capacity calculation.
-- `examples/run_flow.py` - minimal end-to-end modeling flow.
+- `src/iam_workload_capacity_model/flow.py` - parameterized orchestration and result contract.
+- `examples/run_flow.py` - data-free application entry point.
+- `examples/synthetic_data.py` - isolated synthetic fixture data.
+- `examples/run_synthetic_test.py` - separate scenario runner for that fixture.
 - `docs/flow.md` - conceptual sequence and the transition to the future queue model.

@@ -7,6 +7,10 @@ gets a continuous workload weight from its active backend tasks, capacity
 units, workflow overhead, and approval outcome. No fixed business request
 taxonomy is required.
 
+The orchestration layer accepts these observations as input. It does not create
+synthetic requests or connect to a provider. Data acquisition belongs to an
+adapter, while synthetic scenarios belong to a separate test/demo script.
+
 The time-bucket aggregate is:
 
 ```text
@@ -50,6 +54,11 @@ When a new time bucket closes:
 3. add completed request weights to the recent-data-weighted empirical
    distributions;
 4. use the updated components for the next forecast.
+
+The parameterized implementation of this sequence is
+`iam_workload_capacity_model.flow.run_forecast`. It receives the observations
+and a `ForecastConfig`, then returns fitted components, simulated workloads,
+and the capacity plan as a structured `ForecastResult`.
 
 The future queue model will consume the resulting workload distribution and
 calculate backlog and service-level outcomes when capacity is insufficient.

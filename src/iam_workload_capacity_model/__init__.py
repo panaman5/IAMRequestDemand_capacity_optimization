@@ -1,6 +1,7 @@
 """IAM request workload and protected-capacity modeling primitives."""
 
 from .capacity import CapacityPlan, plan_capacity
+from .flow import ForecastConfig, ForecastResult, run_forecast
 from .forecast import (
     CountForecast,
     NegativeBinomialModel,
@@ -19,6 +20,8 @@ __all__ = [
     "BackendTask",
     "CapacityPlan",
     "CountForecast",
+    "ForecastConfig",
+    "ForecastResult",
     "NegativeBinomialModel",
     "RequestObservation",
     "RejectionRateModel",
@@ -28,4 +31,5 @@ __all__ = [
     "fit_workload_distributions",
     "plan_capacity",
     "request_workload",
+    "run_forecast",
 ]

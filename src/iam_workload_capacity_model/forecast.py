@@ -174,7 +174,7 @@ def compound_workload_forecast(
     distributions: dict[str, WeightedEmpiricalDistribution],
     *,
     simulations: int = 5000,
-    seed: int = 20260905,
+    seed: int | None = 20260905,
 ) -> tuple[float, ...]:
     """Simulate total workload from count, outcome, and weight distributions.
 
