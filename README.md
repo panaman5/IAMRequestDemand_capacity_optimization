@@ -15,22 +15,30 @@ probabilistic capacity forecast.
 
 ## Model flow
 
-```text
-historical IAM observations
-            |
-            v
-per-request workload contract
-            |
-            +--> request-count forecast --------+
-            |                                    |
-            +--> rejection-rate forecast -------+--> compound workload simulation
-            |                                    |
-            +--> outcome-conditioned weights ----+
-                                                 |
-                                                 v
-                                  protected request capacity (P95)
-                                                 |
-                                      spare capacity or deficit
+```mermaid
+flowchart LR
+    A[Historical IAM observations] --> B[RequestObservation]
+    B --> C[Workload contract]
+
+    C --> D[Request-count forecast<br/>Negative Binomial]
+    C --> E[Rejection-rate forecast]
+    C --> F[Outcome-conditioned<br/>empirical weights]
+
+    D --> G[Compound workload<br/>Monte Carlo simulation]
+    E --> G
+    F --> G
+
+    G --> H[P95 protected<br/>request capacity]
+    H --> I{Capacity check}
+    I --> J[Spare capacity]
+    I --> K[Capacity deficit]
+
+    classDef input fill:#E8F1FB,stroke:#4C78A8,color:#102A43
+    classDef model fill:#F0F4F8,stroke:#829AB1,color:#243B53
+    classDef decision fill:#E8F5E9,stroke:#59A14F,color:#1B4332
+    class A,B input
+    class C,D,E,F,G model
+    class H,I,J,K decision
 ```
 
 Requests receive priority by construction. The capacity decision reserves a
