@@ -13,6 +13,8 @@ probabilistic capacity forecast.
 > synthetic data and are not a production-accuracy claim or a vendor-specific
 > IAM connector.
 
+![Illustration of IAM request demand flowing through approval, workload processing, and protected capacity planning](docs/iam-request-demand-capacity-hero.png)
+
 ## Model flow
 
 ```mermaid
