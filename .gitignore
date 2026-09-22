@@ -6,7 +6,16 @@ build/
 *.egg-info/
 .DS_Store
 tmp/
-output/pdf/*.aux
-output/pdf/*.log
-output/pdf/*.out
-output/pdf/*.toc
+
+# Generated experiment data and reports.
+data/
+output/*
+!output/pdf/
+output/pdf/*
+!output/pdf/iam_request_demand_capacity_report.pdf
+
+# Previous exploratory documents superseded by the portfolio report.
+docs/flow.md
+docs/evaluation.md
+docs/forecast_walkthrough.tex
+docs/iam_capacity_codebook.tex

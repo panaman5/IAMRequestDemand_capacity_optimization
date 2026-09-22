@@ -8,7 +8,7 @@ from .forecast import (
     RejectionRateModel,
     compound_workload_forecast,
 )
-from .models import BackendTask, RequestObservation
+from .request_contract import BackendTask, RequestObservation
 from .workload import (
     WeightedEmpiricalDistribution,
     aggregate_workload,

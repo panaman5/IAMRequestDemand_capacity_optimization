@@ -1,0 +1,361 @@
+\documentclass[11pt,a4paper]{article}
+
+% Focused portfolio report: the implementation is the source of truth.
+\usepackage[a4paper,margin=23mm,headheight=24pt]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+% The cached compiler lacks the smaller Latin Modern metrics; keep equation
+% subscripts at the document size rather than requesting unavailable 8pt fonts.
+\DeclareMathSizes{10.95}{10.95}{10.95}{10.95}
+
+\definecolor{navy}{HTML}{102A43}
+\definecolor{bodyblue}{HTML}{243B53}
+\definecolor{muted}{HTML}{486581}
+\definecolor{ruleblue}{HTML}{D9E2EC}
+\definecolor{boxblue}{HTML}{F0F4F8}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=navy,
+  urlcolor=navy,
+  pdftitle={IAM Request Demand and Capacity Optimization},
+  pdfauthor={IAMRequestDemand_capacity_optimization}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textcolor{muted}{IAMRequestDemand\_capacity\_optimization}}
+\rhead{\textcolor{muted}{Technical report}}
+\cfoot{\textcolor{muted}{\thepage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{ruleblue}\leaders\hrule height \headrulewidth\hfill}}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\color{bodyblue}
+
+% Keep all headings within the cached 11pt font stack used by the project.
+\makeatletter
+\renewcommand\section{\@startsection{section}{1}{\z@}%
+  {-3.5ex \@plus -1ex \@minus -.2ex}%
+  {2.3ex \@plus .2ex}%
+  {\normalfont\normalsize\bfseries\color{navy}}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+  {-3.25ex\@plus -1ex \@minus -.2ex}%
+  {1.5ex \@plus .2ex}%
+  {\normalfont\normalsize\bfseries\color{bodyblue}}}
+\makeatother
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\formula}[1]{%
+  \begin{center}
+    \colorbox{boxblue}{\parbox{0.92\linewidth}{\begin{equation*}#1\end{equation*}}}
+  \end{center}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{24mm}
+  {\normalsize\bfseries\color{navy} IAM Request Demand and Capacity Optimization\par}
+  \vspace{6mm}
+  {\normalsize A code-aligned probabilistic model for IAM request workload\par}
+  \vspace{14mm}
+  \fcolorbox{ruleblue}{boxblue}{\begin{tabular}{ccc}
+    \textbf{Demand} & \textbf{Workload} & \textbf{Decision}\\
+    request count & request-level weights & protected capacity
+  \end{tabular}}
+  \vfill
+  \begin{minipage}{0.84\linewidth}
+    \normalsize
+    This report documents the current portfolio prototype. It follows the
+    implementation path from \code{RequestObservation} to the final capacity
+    plan and reports the results of the reproducible synthetic experiments.
+    It does not claim production accuracy or vendor-specific behavior.
+  \end{minipage}
+  \vfill
+  {\color{muted}IAMRequestDemand\_capacity\_optimization · version 0.1 · September 2026\par}
+\end{titlepage}
+
+\section{Problem and modeling objective}
+
+IAM capacity is often planned from historical averages and operational
+experience. That approach can hide two distinct uncertainties: how many
+requests will arrive, and how much active backend capacity each request will
+consume. The model makes both quantities explicit.
+
+For a future planning bucket $t$, the target is a predictive distribution for
+the total request workload $W_t$, not only a point estimate:
+
+\formula{W_t = \sum_{i=1}^{N_t} w_{i,t}}
+
+Here $N_t$ is the future request count and $w_{i,t}$ is the active workload of
+request $i$. The capacity policy then protects a selected quantile of $W_t$.
+The current prototype uses P95 for the main experiment.
+
+\section{Implementation flow}
+
+The code is deliberately split into small contracts. Data acquisition remains
+outside the model, so a future IAM adapter can map vendor records into the same
+request observation interface.
+
+\begin{center}
+\fbox{\begin{minipage}{0.88\linewidth}\centering
+\textbf{IAM adapter} $\rightarrow$ \textbf{RequestObservation}
+ $\rightarrow$ \textbf{workload decomposition}\\[2mm]
+\textbf{count model}\quad +\quad \textbf{rejection model}\quad +\quad
+\textbf{empirical weights}\\[2mm]
+\hfill $\rightarrow$ \textbf{compound simulation} $\rightarrow$
+ \textbf{capacity plan}
+\end{minipage}}
+\end{center}
+
+\subsection{Request workload contract}
+
+The request-level workload is implemented in
+\code{request_contract.py}. It separates work
+that happens before the outcome, approval-workflow execution, and backend tasks
+that are conditional on approval:
+
+\formula{w_i = w_{i,\mathrm{pre}} + w_{i,\mathrm{workflow}}
+       + \mathbb{1}_{\{\mathrm{approved}\}}w_{i,\mathrm{backend}}}
+
+Backend workload is the sum of resource-time across observed tasks:
+
+\formula{w_{i,\mathrm{backend}} = \sum_j
+  \mathrm{active\_seconds}_{ij}\,\mathrm{capacity\_units}_{ij}}
+
+Workflow workload is the active execution used to calculate approval steps,
+resolve approvers, and route the request:
+
+\formula{w_{i,\mathrm{workflow}} =
+  \mathrm{workflow\_overhead\_seconds}_i\,
+  \mathrm{workflow\_capacity\_units}_i}
+
+This sum preserves capacity consumed by parallel tasks. A rejected request
+still pays the pre-work and workflow costs; only post-approval backend tasks are
+gated by the outcome. Human waiting time is not counted as active capacity
+unless the system actually holds a capacity unit while waiting.
+
+\subsection{Historical aggregation and empirical distributions}
+
+\code{workload.py} aggregates observations into period-level request counts and
+total workloads. It then fits one weighted empirical distribution for approved
+requests and one for rejected requests. No Normal assumption is imposed on
+request workload values.
+
+The observations remain visible as actual workload values. Their influence is
+controlled by a recency weight:
+
+\formula{a_j = \lambda^j, \qquad 0 < \lambda \leq 1}
+
+Here $j=0$ is the newest observation. With the experiment's $\lambda=0.995$,
+old observations are gradually down-weighted without being discarded. The
+weighted empirical sampler preserves skew and high-cost tails.
+
+\subsection{Request-count forecast}
+
+\code{forecast.py} fits a Negative Binomial baseline to historical period
+counts using method-of-moments estimates. If $\mu$ is the sample mean and $v$
+the sample variance, the model uses:
+
+\formula{v = \mu + \phi\mu^2, \qquad
+  \widehat{\phi}=\max\left(0,\frac{v-\mu}{\mu^2}\right)}
+
+The $\phi$ term is the dispersion parameter. When observed variance is larger
+than the mean, it allows more variation than a Poisson model. Future counts are
+sampled through the equivalent Gamma--Poisson mixture: first sample a Poisson
+rate from a Gamma distribution, then sample the request count from that rate.
+
+The class also exposes an online correction state:
+
+\formula{s_{t+1}=\omega+\rho s_t+\eta\,\mathrm{score}_t}
+
+The current experiment uses the static fit at each forecast origin; the update
+method is the interface for a later continuously updated deployment loop.
+
+\subsection{Rejection model and compound simulation}
+
+The rejection component estimates the probability that a request is rejected
+before backend activation. It stores the probability on the log-odds scale,
+which keeps the transformed forecast between zero and one. In each simulation,
+the flow samples a future request count, samples an outcome for every request,
+samples a workload from the matching empirical distribution, and adds all
+request workloads into one simulated $W_t$.
+
+\subsection{Capacity decision}
+
+The resulting simulated sample is passed to \code{capacity.py}:
+
+\formula{C_{\mathrm{requests},t}=Q_{0.95}(W_t),\qquad
+ C_{\mathrm{spare},t}=\max(0,C_{\mathrm{total},t}-C_{\mathrm{requests},t})}
+
+If protected request capacity exceeds total capacity, the difference is
+reported as a deficit. This makes request priority explicit instead of hiding
+it inside an average utilization number.
+
+\section{Implementation map}
+
+\begin{center}
+\normalsize
+\begin{tabular}{p{0.36\linewidth}p{0.51\linewidth}}
+\toprule
+\textbf{Module} & \textbf{Responsibilities}\\
+\midrule
+\code{request_contract.py} & Request observations, backend tasks, workload contract\\
+\code{workload.py} & Aggregation, recency weights, empirical fit and sampling\\
+\code{forecast.py} & Count model, rejection model, compound simulation\\
+\code{capacity.py} & Quantile protection, spare capacity, deficit\\
+\code{flow.py} & Parameter validation and end-to-end orchestration\\
+\code{examples/} & Synthetic data and reproducible experiment runners\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Experimental design}
+
+The main experiment is synthetic so that the complete flow can be reproduced
+without exposing real IAM data. It contains 120 daily periods, approximately
+200 requests per period, an approximately 11\% rejection rate, overdispersed
+counts, workflow execution for every request, and an 8\% high-cost backend tail
+among approved requests.
+
+The capacity experiment uses 10,000 Monte Carlo simulations, a P95 protection
+target, total capacity of 3,000 capacity-unit seconds per period, and seed
+20260920. The separate walk-forward evaluation uses 84 training periods, 36
+held-out periods, and 1,000 simulations at each evaluation origin.
+
+\section{Results}
+
+\subsection{Main capacity experiment}
+
+The generated dataset contains 23,431 request observations. The observed
+rejection rate is 10.97\%. The fitted request-count mean is 195.26 requests
+per period, and the approved/rejected workload means are 15.47 and 2.70
+capacity units per request respectively.
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Quantity} & \textbf{Value}\\
+\midrule
+Simulated total-workload P50 & 2,671.88\\
+Simulated total-workload P75 & 3,314.21\\
+Simulated total-workload P90 & 3,981.97\\
+Simulated total-workload P95 & 4,391.47\\
+Simulated total-workload P99 & 5,431.87\\
+Configured total capacity & 3,000.00\\
+Protected request capacity & 4,391.47\\
+Reported capacity deficit & 1,391.47\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The compact histogram below is a visual summary of the simulated workload
+distribution. Bars are scaled relative to the largest bin.
+
+\begin{center}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c@{\quad}c}
+\rule[-1mm]{6mm}{1mm}&\rule[-1mm]{6mm}{18mm}&\rule[-1mm]{6mm}{51mm}&\rule[-1mm]{6mm}{62mm}&\rule[-1mm]{6mm}{47mm}&\rule[-1mm]{6mm}{27mm}&\rule[-1mm]{6mm}{10mm}&\rule[-1mm]{6mm}{3mm}&\rule[-1mm]{6mm}{2mm}&\rule[-1mm]{6mm}{1mm}&\rule[-1mm]{6mm}{1mm}&\rule[-1mm]{6mm}{1mm}\\
+296&944&1592&2240&2888&3536&4184&4832&5480&6128&6776&7424\\
+\multicolumn{12}{c}{\normalsize simulated future total-workload bins (capacity units)}
+\end{tabular}
+\end{center}
+
+\subsection{Walk-forward evaluation}
+
+At each origin, the model sees only the preceding periods, forecasts the next
+period, and compares the result with the held-out request count and workload.
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Result}\\
+\midrule
+Request-count MAE & 60.88 requests\\
+Request-count P95 coverage & 91.67\%\\
+Workload P50 MAE & 842.99 capacity units\\
+Workload P95 coverage & 91.67\%\\
+Average-weight MAE & 0.52 units/request\\
+Average predicted rejection rate & 11.07\%\\
+Average actual rejection rate & 10.59\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The weight estimate is relatively stable in this synthetic scenario, while the
+request count is harder to predict. Since total workload is a compound sum,
+count uncertainty propagates directly into workload uncertainty.
+
+\subsection{Count-model scenario comparison}
+
+The isolated scenario experiment compares the stationary baseline with a
+seasonal extension. The result is diagnostic rather than a model-selection
+claim:
+
+\begin{center}
+\normalsize
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Scenario} & \textbf{Model} & \textbf{MAE} & \textbf{P95 coverage}\\
+\midrule
+Stationary & Stationary NB & 61.28 & 94.44\%\\
+Stationary & Seasonal NB & 60.02 & 94.44\%\\
+Weak seasonal & Stationary NB & 70.84 & 83.33\%\\
+Weak seasonal & Seasonal NB & 72.00 & 80.56\%\\
+Strong seasonal & Stationary NB & 49.81 & 100.00\%\\
+Strong seasonal & Seasonal NB & 38.67 & 100.00\%\\
+Random shocks & Stationary NB & 83.74 & 94.44\%\\
+Random shocks & Seasonal NB & 82.50 & 91.67\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The comparison illustrates why the current Negative Binomial component should
+be treated as a baseline: it can represent overdispersion, but it does not
+automatically learn seasonality or external drivers.
+
+\section{Interpretation and limitations}
+
+The portfolio result is not that the synthetic model is already production-
+accurate. It is that the capacity question has been decomposed into auditable
+components with an explicit risk policy:
+
+\begin{itemize}
+  \item request demand is modeled separately from request cost;
+  \item request cost is derived from active workflow and backend work;
+  \item approval outcomes determine whether backend workload is activated;
+  \item simulation converts component uncertainty into a total-workload
+        distribution;
+  \item the P95 quantile turns that distribution into a request-priority
+        capacity decision.
+\end{itemize}
+
+The current results are limited by the synthetic data, the pooled count fit,
+the method-of-moments baseline, and the absence of a real queue/service-level
+model. A production-oriented next step would use aggregated and anonymized IAM
+observations, establish a rolling backtest protocol, and add temporal
+covariates or an online likelihood-based update only where the data supports
+it.
+
+\section{Reproducibility}
+
+From the repository root:
+
+\begin{verbatim}
+PYTHONPATH=src python3 examples/run_capacity_experiment.py
+PYTHONPATH=src python3 examples/run_walk_forward_evaluation.py
+PYTHONPATH=src python3 examples/run_count_model_scenarios.py
+\end{verbatim}
+
+The numbers in this report correspond to the seeds and configurations stated
+in Section 5. Generated CSV/JSON outputs are intentionally not part of the
+portfolio repository; the scripts regenerate them when needed.
+
+\end{document}

@@ -55,31 +55,42 @@ class RequestObservation:
 
     @property
     def backend_workload(self) -> float:
-        """Return active backend and orchestration workload.
+        """Return active post-approval backend task workload.
 
-        The orchestration term is included only when the workflow engine
-        itself consumes a measurable capacity resource. Approval waiting is
-        not included here because waiting is not active execution.
+        This property deliberately excludes approval-workflow orchestration.
+        Backend tasks are conditional on approval, while the workflow engine
+        has already consumed capacity calculating the approval steps and
+        approvers even when the final outcome is rejected.
         """
 
         # Summing task resource-time preserves the capacity consumed by tasks
         # that run concurrently; using only elapsed request time would lose it.
-        task_workload = sum(task.workload for task in self.tasks)
-        orchestration_workload = (
-            self.workflow_overhead_seconds * self.workflow_capacity_units
-        )
-        return task_workload + orchestration_workload
+        return sum(task.workload for task in self.tasks)
+
+    @property
+    def workflow_workload(self) -> float:
+        """Return active approval-workflow capacity consumption.
+
+        This covers workflow-engine execution such as calculating approval
+        steps, resolving approvers, and routing the request. It excludes time
+        spent waiting for a human approval. Because this work happens before
+        the outcome is known, it is charged to both approved and rejected
+        requests.
+        """
+
+        return self.workflow_overhead_seconds * self.workflow_capacity_units
 
     @property
     def workload(self) -> float:
         """Return total workload under the approval-outcome contract.
 
-        A rejected request still has pre-decision cost, but it does not receive
-        backend calculation cost when rejection happens before activation.
+        A rejected request still has pre-decision cost and approval-workflow
+        execution cost, but it does not receive post-approval backend task
+        cost when rejection happens before activation.
         """
 
-        # The indicator in the mathematical model is implemented as this
-        # outcome check. It is the link between rejection forecasting and
-        # backend capacity demand.
+        # Workflow execution is unconditional: the workflow engine calculates
+        # the approval route before the request is approved or rejected.
+        # Only post-approval backend tasks are gated by the outcome.
         backend = self.backend_workload if self.outcome == "approved" else 0.0
-        return self.pre_workload + backend
+        return self.pre_workload + self.workflow_workload + backend

@@ -8,11 +8,11 @@ into a Normal distribution.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
 from typing import Iterable, Sequence
 
-from .models import RequestObservation
+from .request_contract import RequestObservation
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,7 @@ class WeightedEmpiricalDistribution:
 
     values: tuple[float, ...]
     weights: tuple[float, ...]
+    _cumulative_weights: tuple[float, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if len(self.values) != len(self.weights) or not self.values:
@@ -34,6 +35,12 @@ class WeightedEmpiricalDistribution:
             raise ValueError("workload values must be non-negative")
         if any(weight <= 0 for weight in self.weights):
             raise ValueError("distribution weights must be positive")
+        cumulative: list[float] = []
+        running_total = 0.0
+        for weight in self.weights:
+            running_total += weight
+            cumulative.append(running_total)
+        object.__setattr__(self, "_cumulative_weights", tuple(cumulative))
 
     @property
     def mean(self) -> float:
@@ -61,7 +68,10 @@ class WeightedEmpiricalDistribution:
     def sample(self, rng: random.Random) -> float:
         """Draw one request workload using the empirical probabilities."""
 
-        return rng.choices(self.values, weights=self.weights, k=1)[0]
+        # ``random.choices`` can accept precomputed cumulative weights. This
+        # avoids rebuilding the same cumulative sum for every simulated
+        # request, which matters when the history contains thousands of rows.
+        return rng.choices(self.values, cum_weights=self._cumulative_weights, k=1)[0]
 
 
 def request_workload(request: RequestObservation) -> float:
